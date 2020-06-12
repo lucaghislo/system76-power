@@ -1,4 +1,4 @@
-use crate::{module::Module, pci::PciBus};
+use crate::{modprobe, module::Module, pci::PciBus};
 use std::{
     fs,
     io::{self, Write},
@@ -62,6 +62,8 @@ pub enum GraphicsDeviceError {
     Unbind { func: String, driver: String, why: io::Error },
     #[error(display = "update-initramfs failed with {} status", _0)]
     UpdateInitramfs(ExitStatus),
+    #[error(display = "{}", _0)]
+    ModuleUnload(io::Error),
 }
 
 pub struct GraphicsDevice {
@@ -325,6 +327,20 @@ impl Graphics {
             self.bus.rescan().map_err(GraphicsDeviceError::Rescan)?;
         } else {
             info!("Disabling graphics power");
+            // Have to unload in a specific order
+            let nvidia_names = [
+                "nvidia_drm",
+                "nvidia_modeset",
+                "nvidia_uvm",
+                "nvidia",
+            ];
+
+            let modules = Module::all().map_err(GraphicsDeviceError::ModulesFetch)?;
+            for m in &nvidia_names {
+                if modules.iter().any(|module| module.name.as_str() == *m) {
+                    modprobe::unload(m).map_err(GraphicsDeviceError::ModuleUnload)?;
+                }
+            }
 
             unsafe {
                 // Unbind NVIDIA graphics devices and their functions
